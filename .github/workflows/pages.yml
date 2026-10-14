@@ -2,9 +2,7 @@ name: Pages
 
 on:
     schedule:
-        # Every 10 minutes (:05, :15, …), aligned with OpenRouter's
-        # model-uptime-recent refresh cadence. GitHub cron is UTC-only.
-        - cron: '5,15,25,35,45,55 * * * *'
+        - cron: '5/10 * * * *'
     workflow_dispatch:
 
 concurrency:
