@@ -1,0 +1,66 @@
+name: Pages
+
+on:
+    schedule:
+        # Every 10 minutes (:05, :15, …), aligned with OpenRouter's
+        # model-uptime-recent refresh cadence. GitHub cron is UTC-only.
+        - cron: '5,15,25,35,45,55 * * * *'
+    workflow_dispatch:
+
+concurrency:
+    group: pages-deploy
+    cancel-in-progress: false
+
+permissions:
+    contents: write
+
+jobs:
+    deploy:
+        runs-on: ubuntu-latest
+        timeout-minutes: 15
+        steps:
+            - uses: actions/checkout@v6
+
+            - uses: actions/setup-node@v6
+              with:
+                  node-version: 24
+                  cache: npm
+
+            - run: npm ci
+
+            - name: Typecheck
+              run: npm run typecheck
+
+            - name: Fetch previous snapshot from gh-pages (seed)
+              run: |
+                  mkdir -p .seed
+                  if git fetch origin gh-pages --depth=1 2>/dev/null; then
+                    for f in uptime benchmarks; do
+                      git show FETCH_HEAD:data/$f.json > .seed/$f.json 2>/dev/null \
+                        || rm -f .seed/$f.json
+                    done
+                    echo "::notice::seed files: $(ls .seed | tr '\n' ' ')"
+                  else
+                    echo "::notice::gh-pages branch not found — first run"
+                  fi
+
+            - name: Collect and build site/
+              run: npm run collect
+              env:
+                  SEED_DIR: .seed
+
+            - name: Deploy to gh-pages (single commit)
+              run: |
+                  set -euo pipefail
+                  TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+                  cd site
+                  git init -q
+                  git checkout -q -b gh-pages
+                  git add -A
+                  git -c user.name="github-actions[bot]" \
+                      -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+                      commit -q -m "data: ${TS}"
+                  git push -q -f "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" gh-pages
+                  echo "::notice::deployed ${TS}"
+              env:
+                  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

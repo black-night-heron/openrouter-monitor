@@ -1,0 +1,157 @@
+#!/usr/bin/env tsx
+/**
+ * collect-data.ts — CI entry point (GitHub Actions, every 10 minutes).
+ *
+ * Pipeline:
+ *   1. Load the previous snapshots from the gh-pages branch (the
+ *      "seed") when present: uptime.json carries the 30-day history,
+ *      benchmarks.json is the fallback for a failed benchmark fetch.
+ *   2. Run one collector pass (src/collect.ts — plain data, no database).
+ *   3. Build the payloads; merge this tick's fresh buckets into the
+ *      30-day grid, prune >30d & offline models.
+ *   4. Write the JSON data files and assemble site/.
+ *
+ * Any failure exits non-zero so the workflow aborts without deploying;
+ * the previously published gh-pages content stays online.
+ *
+ * Env:
+ *   SEED_DIR  directory containing a previous uptime.json and/or
+ *             benchmarks.json (optional)
+ */
+
+import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs'
+import { join, resolve } from 'path'
+import { fileURLToPath } from 'url'
+
+import { collectOpenRouter } from '../src/collect.js'
+import {
+  buildStatusPayload,
+  buildBenchmarksPayload,
+  reuseBenchmarkLeaderboard,
+  buildUptimeGridRows,
+  mergeUptimePayload,
+  GRID_STEP_MS,
+  type BenchmarkPayload,
+  type UptimePayload,
+} from '../src/payloads.js'
+
+const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)))
+const SITE_DIR = resolve(ROOT, 'site')
+const DATA_DIR = resolve(SITE_DIR, 'data')
+
+function formatBytes(bytes: number): string {
+  return bytes >= 1024 * 1024
+    ? `${(bytes / 1024 / 1024).toFixed(2)} MiB`
+    : `${(bytes / 1024).toFixed(1)} KiB`
+}
+
+function writeJson(name: string, value: unknown): number {
+  const json = JSON.stringify(value)
+  writeFileSync(resolve(DATA_DIR, name), json)
+  return Buffer.byteLength(json)
+}
+
+function loadUptimeSeed(path: string): UptimePayload | null {
+  try {
+    const prev = JSON.parse(readFileSync(path, 'utf8')) as UptimePayload
+    if (typeof prev.t0 !== 'number' || !Array.isArray(prev.models) || !Array.isArray(prev.series)) {
+      throw new Error('unexpected shape')
+    }
+    console.log(
+      `[collect-data] Uptime seed loaded: ${prev.models.length} models × ${prev.n} buckets ` +
+      `(${(prev.n * prev.step / 86400000).toFixed(1)}d span)`,
+    )
+    return prev
+  } catch (err) {
+    console.warn(`[collect-data] Uptime seed decode failed (${(err as Error).message}) — starting from an empty grid`)
+    return null
+  }
+}
+
+function loadBenchmarksSeed(path: string): BenchmarkPayload[] | null {
+  try {
+    const prev = JSON.parse(readFileSync(path, 'utf8')) as { models: BenchmarkPayload[] }
+    if (!Array.isArray(prev.models)) throw new Error('unexpected shape')
+    console.log(`[collect-data] Benchmarks seed loaded: ${prev.models.length} models`)
+    return prev.models
+  } catch (err) {
+    console.warn(`[collect-data] Benchmarks seed decode failed (${(err as Error).message})`)
+    return null
+  }
+}
+
+function assembleSite(): void {
+  rmSync(SITE_DIR, { recursive: true, force: true })
+  mkdirSync(DATA_DIR, { recursive: true })
+  cpSync(resolve(ROOT, 'public'), SITE_DIR, { recursive: true })
+  writeFileSync(resolve(SITE_DIR, '.nojekyll'), '')
+}
+
+async function main(): Promise<void> {
+  const now = Date.now()
+
+  // 1. Seed — the previous data files from the gh-pages branch (optional).
+  let prevUptime: UptimePayload | null = null
+  let prevBenchmarks: BenchmarkPayload[] | null = null
+  const seedDir = process.env.SEED_DIR ? resolve(process.env.SEED_DIR) : null
+  if (seedDir && existsSync(seedDir)) {
+    const uptimePath = join(seedDir, 'uptime.json')
+    if (existsSync(uptimePath)) prevUptime = loadUptimeSeed(uptimePath)
+    const benchmarksPath = join(seedDir, 'benchmarks.json')
+    if (existsSync(benchmarksPath)) prevBenchmarks = loadBenchmarksSeed(benchmarksPath)
+  } else {
+    console.log('[collect-data] No seed directory — starting from an empty grid')
+  }
+
+  // 2. Collector pass.
+  const result = await collectOpenRouter()
+  if (!result.success) {
+    console.error(`[collect-data] Collector failed: ${result.error}`)
+    process.exit(1)
+  }
+  const { dataset } = result
+
+  // 3. Payloads + 30-day merge.
+  const status = buildStatusPayload(dataset)
+  const fresh = buildUptimeGridRows(dataset)
+
+  const freeSlugs = new Set(dataset.models.map((m) => m.slug))
+  let benchmarks: BenchmarkPayload[]
+  if (dataset.benchmarksOk) {
+    benchmarks = buildBenchmarksPayload(dataset.benchmarks, freeSlugs)
+  } else if (prevBenchmarks) {
+    console.warn('[collect-data] Benchmark fetch failed — republishing the seeded leaderboard')
+    benchmarks = reuseBenchmarkLeaderboard(prevBenchmarks, freeSlugs)
+  } else {
+    console.warn('[collect-data] Benchmark fetch failed and no seed available — publishing an empty leaderboard')
+    benchmarks = []
+  }
+
+  const liveIds = new Set(status.models.map((m) => m.id))
+  const metaFor = (id: string) => {
+    const model = status.models.find((m) => m.id === id)
+    return model ? { owner: model.owner, name: model.name } : undefined
+  }
+  const uptime = mergeUptimePayload(prevUptime, fresh, now, liveIds, metaFor)
+
+  // 4. Write the JSON data files and assemble site/.
+  assembleSite()
+  const generatedAt = new Date(now).toISOString()
+  const statusSize = writeJson('dashboard.json', { generatedAt, ...status })
+  const uptimeSize = writeJson('uptime.json', { generatedAt, ...uptime })
+  const benchmarksSize = writeJson('benchmarks.json', { generatedAt, models: benchmarks })
+
+  console.log(
+    `[collect-data] site/ written: dashboard.json ${formatBytes(statusSize)}, ` +
+    `uptime.json ${formatBytes(uptimeSize)}, benchmarks.json ${formatBytes(benchmarksSize)}`,
+  )
+  console.log(
+    `[collect-data] uptime: ${uptime.models.length} models × ${uptime.n} buckets ` +
+    `(${(uptime.n * GRID_STEP_MS / 86400000).toFixed(1)}d)`,
+  )
+}
+
+main().catch((err) => {
+  console.error('[collect-data] Unhandled error:', err)
+  process.exit(1)
+})

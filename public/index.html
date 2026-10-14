@@ -1,0 +1,330 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="description" content="Live availability, provider routing and benchmark scores for free OpenRouter models." />
+  <meta name="color-scheme" content="light dark" />
+  <meta name="theme-color" content="#f8f9fb" media="(prefers-color-scheme: light)" />
+  <meta name="theme-color" content="#0f1117" media="(prefers-color-scheme: dark)" />
+  <title>OpenRouter Monitor — Free Models &amp; Provider Uptime</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%234f46e5'/%3E%3Cpath d='M6 20l5-7 4 4 5-8 6 7' fill='none' stroke='white' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E" />
+
+  <!-- Apply the theme before paint to avoid a flash of the wrong one. -->
+  <script>
+    (function () {
+      try {
+        var stored = localStorage.getItem('orm-theme')
+        if (stored === 'light' || stored === 'dark') {
+          document.documentElement.setAttribute('data-theme', stored)
+        } else if (matchMedia('(prefers-color-scheme:dark)').matches) {
+          document.documentElement.setAttribute('data-theme', 'dark')
+        }
+      } catch (e) { /* localStorage blocked (private mode) — fall back to system */ }
+    })()
+  </script>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;450;500;550;600;650;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" />
+
+  <!-- Deferred so the CDN fetch doesn't block the parser; deferred scripts
+       still run in document order, so Chart exists before app.js runs. -->
+  <script defer src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"
+          integrity="sha384-e6nUZLBkQ86NJ6TVVKAeSaK8jWa3NhkYWZFomE39AvDbQWeie9PlQqM3pmYW5d1g"
+          crossorigin="anonymous"></script>
+  <script defer src="app.js"></script>
+</head>
+<body>
+  <!-- Header -->
+  <header class="header">
+    <div class="container header-inner">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 32 32" width="26" height="26" fill="none">
+            <rect width="32" height="32" rx="8" fill="currentColor" />
+            <path d="M6 20l5-7 4 4 5-8 6 7" stroke="#fff" stroke-width="2.5"
+                  stroke-linecap="round" stroke-linejoin="round" />
+          </svg>
+        </span>
+        <div class="brand-text">
+          <h1>OpenRouter Monitor</h1>
+          <p class="brand-sub">Free Models &amp; Provider Uptime</p>
+        </div>
+      </div>
+
+      <div class="header-right">
+        <button type="button" class="icon-btn" id="theme-toggle"
+                aria-label="Switch to dark theme" title="Switch theme">
+          <svg class="icon-sun" viewBox="0 0 24 24" width="16" height="16" fill="none"
+               stroke="currentColor" stroke-width="1.9" stroke-linecap="round" aria-hidden="true">
+            <circle cx="12" cy="12" r="4.2" />
+            <path d="M12 2.6v2.2M12 19.2v2.2M2.6 12h2.2M19.2 12h2.2M5.3 5.3l1.6 1.6M17.1 17.1l1.6 1.6M18.7 5.3l-1.6 1.6M6.9 17.1l-1.6 1.6" />
+          </svg>
+          <svg class="icon-moon" viewBox="0 0 24 24" width="16" height="16" fill="none"
+               stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M20.5 14.2A8.6 8.6 0 0 1 9.8 3.5a8.6 8.6 0 1 0 10.7 10.7z" />
+          </svg>
+        </button>
+
+        <button type="button" class="icon-btn" id="refresh-btn" aria-label="Refresh data" title="Refresh now">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor"
+               stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M20 11a8 8 0 1 0-.6 4" />
+            <path d="M20 4.5V11h-6.2" />
+          </svg>
+        </button>
+
+        <a href="https://github.com/black-night-heron/openrouter-monitor"
+           target="_blank" rel="noopener"
+           class="icon-btn"
+           aria-label="View source on GitHub"
+           title="Source on GitHub">
+          <svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor" aria-hidden="true">
+            <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38
+              0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01
+              1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95
+              0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2
+              .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65
+              3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z"/>
+          </svg>
+        </a>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main Content -->
+  <main class="container">
+    <!-- KPI bar -->
+    <section class="stat-bar" id="summary-cards" aria-label="Summary">
+      <div class="stat-item">
+        <div class="stat-head">
+          <span class="stat-dot dot-accent" aria-hidden="true"></span>
+          <div class="stat-value" id="stat-free-models">—</div>
+        </div>
+        <div class="stat-label">Free Models</div>
+      </div>
+      <span class="stat-divider" aria-hidden="true"></span>
+      <div class="stat-item">
+        <div class="stat-head">
+          <span class="stat-dot dot-emerald" id="stat-uptime-dot" aria-hidden="true"></span>
+          <div class="stat-value" id="stat-uptime">—</div>
+        </div>
+        <div class="stat-label">Avg Availability</div>
+      </div>
+      <span class="stat-divider" aria-hidden="true"></span>
+      <div class="stat-item">
+        <div class="stat-head">
+          <span class="stat-dot dot-violet" aria-hidden="true"></span>
+          <div class="stat-value" id="stat-providers">—</div>
+        </div>
+        <div class="stat-label">Providers</div>
+      </div>
+      <span class="stat-divider" aria-hidden="true"></span>
+      <div class="stat-item">
+        <div class="stat-head">
+          <span class="stat-dot dot-muted" aria-hidden="true"></span>
+          <div class="stat-value stat-value-sm" id="stat-last-check">—</div>
+        </div>
+        <div class="stat-label">Last Updated</div>
+      </div>
+    </section>
+
+    <!-- Tabs -->
+    <nav class="tabs" id="tabs-nav" role="tablist" aria-label="Dashboard views">
+      <button class="tab active" id="tab-btn-models" data-tab="models" role="tab"
+              aria-selected="true" aria-controls="tab-models">Models</button>
+      <button class="tab" id="tab-btn-trends" data-tab="trends" role="tab"
+              aria-selected="false" aria-controls="tab-trends" tabindex="-1">Trends</button>
+      <button class="tab" id="tab-btn-compare" data-tab="compare" role="tab"
+              aria-selected="false" aria-controls="tab-compare" tabindex="-1">Compare</button>
+    </nav>
+
+    <!-- Collapsed by default so the dashboard top stays scannable. -->
+    <details class="notes" id="notes">
+      <summary class="notes-summary">
+        <svg viewBox="0 0 16 16" width="13" height="13" fill="currentColor" aria-hidden="true">
+          <path d="M8 16A8 8 0 1 0 8 0a8 8 0 0 0 0 16zm.93-9.412-1 4.705c-.07.34.029.533.304.533.194 0 .487-.07.686-.246l-.088.416c-.287.346-.92.598-1.465.598-.703 0-1.002-.422-.808-1.319l.738-3.468c.064-.293.006-.399-.287-.47l-.451-.081.082-.381 2.29-.287zM8 5.5a1 1 0 1 1 0-2 1 1 0 0 1 0 2z"/>
+        </svg>
+        <span>Data Source</span>
+        <svg class="notes-caret" viewBox="0 0 12 12" width="11" height="11" fill="currentColor" aria-hidden="true">
+          <path d="M6 8.5L1.5 4h9z"/>
+        </svg>
+      </summary>
+      <div class="notes-body">
+        <p>
+          Every 10 minutes a GitHub Actions workflow asks OpenRouter how each free model is doing.
+          <strong>Availability</strong> is the average of those checks over the last 24 hours.
+        </p>
+        <p>
+          The raw data ships next to this page as plain JSON: <code>data/dashboard.json</code>
+          (current snapshot), <code>data/uptime.json</code> (30 days of 10-minute readings) and
+          <code>data/benchmarks.json</code> (leaderboard scores).
+        </p>
+        <p>
+          The <strong>Compare</strong> tab uses scores from Artificial Analysis and
+          OpenRouter's Design Arena instead. Those measure how good a model is, not whether it is up.
+        </p>
+      </div>
+    </details>
+
+    <!-- Tab: Models -->
+    <section class="tab-content active" id="tab-models" role="tabpanel" aria-labelledby="tab-btn-models" tabindex="0">
+      <div class="toolbar">
+        <div class="toolbar-field">
+          <input type="search" id="model-search" class="search-input" placeholder="Filter by name, owner, or provider…" aria-label="Filter models" />
+        </div>
+        <div class="toolbar-field toolbar-field-sm">
+          <select id="owner-filter" class="filter-select" aria-label="Filter by owner">
+            <option value="">All Owners</option>
+          </select>
+        </div>
+        <p class="result-count" id="models-count" aria-live="polite"></p>
+      </div>
+      <div class="table-wrap" data-scroll-shadow>
+        <table id="models-table">
+          <thead>
+            <tr>
+              <th data-sort="name" class="sortable">Model <span class="sort-indicator"></span></th>
+              <th data-sort="context_length" class="sortable col-hide-md num">Context <span class="sort-indicator"></span></th>
+              <th data-sort="intelligence_index" class="sortable col-hide-md num" title="Artificial Analysis composite index, 0–100. Coding and Agentic are sub-scores of it.">AA Index <span class="sort-indicator"></span></th>
+              <th data-sort="provider" class="sortable col-hide-md">Provider <span class="sort-indicator"></span></th>
+              <th class="col-hide-sm">Data</th>
+              <th data-sort="uptime_1d" class="sortable sorted-desc num">Availability (24<span class="unit">h</span>) <span class="sort-indicator"></span></th>
+              <th data-sort="updated_at" class="sortable num col-hide-md">Updated <span class="sort-indicator"></span></th>
+            </tr>
+          </thead>
+          <tbody id="models-tbody"></tbody>
+        </table>
+      </div>
+      <p class="empty-message" id="models-empty">No data loaded yet — the snapshot is regenerated every 10 minutes.</p>
+    </section>
+
+    <!-- Tab: Trends Chart -->
+    <section class="tab-content" id="tab-trends" role="tabpanel" aria-labelledby="tab-btn-trends" tabindex="0" hidden>
+      <div class="toolbar">
+        <div class="toolbar-field">
+          <div class="multi-select-wrapper" id="model-multi-select-wrapper">
+            <button type="button" class="multi-select-trigger" id="model-select-trigger"
+                    aria-haspopup="listbox" aria-expanded="false">
+              <span id="model-select-text">Select models to compare…</span>
+            </button>
+            <div class="multi-select-dropdown" id="model-select-dropdown" hidden>
+              <div class="multi-select-search-wrap">
+                <input type="search" class="multi-select-search" id="model-select-search" placeholder="Filter models…" aria-label="Filter model list" />
+              </div>
+              <div class="multi-select-options" id="model-select-options"></div>
+            </div>
+          </div>
+        </div>
+        <div class="toolbar-field toolbar-field-sm">
+          <select id="chart-hours" class="filter-select" aria-label="Time range">
+            <option value="6">Last 6 hours</option>
+            <option value="12">Last 12 hours</option>
+            <option value="24" selected>Last 24 hours</option>
+            <option value="72">Last 3 days</option>
+            <option value="168">Last 7 days</option>
+            <option value="720">Last 30 days</option>
+          </select>
+        </div>
+        <div class="toolbar-group">
+          <button type="button" class="btn-control" id="model-select-top-uptime">Top 5</button>
+          <button type="button" class="btn-control" id="model-select-all">All</button>
+          <button type="button" class="btn-control" id="model-select-none">None</button>
+        </div>
+      </div>
+
+      <div class="chart-card" id="chart-card">
+        <header class="chart-header">
+          <h3 class="panel-title">Availability Over Time</h3>
+          <span class="chart-hint" id="chart-hint">Click a legend entry to hide a series</span>
+        </header>
+        <div class="chart-container" id="chart-container">
+          <canvas id="uptime-chart" role="img" aria-label="Model availability comparison chart showing percentage over time"></canvas>
+        </div>
+        <p class="empty-message" id="uptime-empty">Select models above to view availability data.</p>
+      </div>
+    </section>
+
+    <!-- Tab: Compare (intelligence leaderboard + radar) -->
+    <section class="tab-content" id="tab-compare" role="tabpanel" aria-labelledby="tab-btn-compare" tabindex="0" hidden>
+      <div class="compare-grid">
+        <!-- Radar -->
+        <section class="panel compare-radar-card">
+          <header class="panel-header">
+            <div>
+              <h3 class="panel-title">Capability Radar</h3>
+              <p class="panel-sub">Artificial Analysis indices, 0–100</p>
+            </div>
+            <div class="radar-count" id="compare-selected-count" aria-live="polite">0 / 5</div>
+          </header>
+          <div class="panel-body radar-body">
+            <div class="radar-container" id="radar-container">
+              <canvas id="radar-chart" role="img" aria-label="Capability radar chart comparing selected models across Intelligence, Coding and Agentic indices"></canvas>
+            </div>
+            <p class="empty-message compare-empty" id="radar-empty">
+              <span class="empty-title">Nothing pinned yet</span>
+              Click any leaderboard row to overlay it here. Up to 5 models at a time.
+            </p>
+          </div>
+          <footer class="panel-footer">
+            <button type="button" class="btn-control" id="compare-clear">Clear all</button>
+          </footer>
+        </section>
+
+        <!-- Leaderboard -->
+        <section class="panel compare-leaderboard-card">
+          <header class="panel-header">
+            <div>
+              <h3 class="panel-title">Intelligence Leaderboard</h3>
+              <p class="panel-sub">Click a row to pin to the radar · click ▸ for arena detail</p>            </div>
+            <span class="badge-count" id="bench-count">—</span>
+          </header>
+          <div class="toolbar toolbar-inset">
+            <div class="toolbar-field">
+              <input type="search" id="bench-search" class="search-input" placeholder="Filter by name…" aria-label="Filter leaderboard" />
+            </div>
+            <label class="check-toggle">
+              <input type="checkbox" id="bench-free-only" />
+              <span>Free only</span>
+            </label>
+          </div>
+          <div class="table-wrap compare-table-wrap" data-scroll-shadow>
+            <table id="bench-table">
+              <thead>
+                <tr>
+                  <th data-sort="rank" class="sortable">Rank<span class="sort-indicator"></span></th>
+                  <th data-sort="name" class="sortable">Model<span class="sort-indicator"></span></th>
+                  <th data-sort="intelligence_index" class="sortable num col-hide-sm">Intel<span class="sort-indicator"></span></th>
+                  <th data-sort="coding_index" class="sortable num col-hide-sm">Coding<span class="sort-indicator"></span></th>
+                  <th data-sort="agentic_index" class="sortable num col-hide-sm">Agentic<span class="sort-indicator"></span></th>
+                  <th class="col-hide-md">Top Arena</th>
+                  <th data-sort="context_length" class="sortable num col-hide-md">Limits<span class="sort-indicator"></span></th>
+                  <th class="col-hide-md">Mods</th>
+                  <th class="col-hide-md">Caps</th>
+                  <th data-sort="price" class="sortable num col-hide-sm">$/M<span class="sort-indicator"></span></th>
+                </tr>
+              </thead>
+              <tbody id="bench-tbody"></tbody>
+            </table>
+          </div>
+          <p class="empty-message compare-empty" id="bench-empty">No benchmark data in the latest snapshot.</p>
+        </section>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- Footer -->
+  <footer class="footer">
+    <div class="container">
+      <p>
+        Powered by <a href="https://openrouter.ai" target="_blank" rel="noopener">OpenRouter API</a>
+        · Regenerated every 10 min by <a href="https://github.com/black-night-heron/openrouter-monitor/actions/workflows/pages.yml" target="_blank" rel="noopener">GitHub Actions</a>
+        · Hosted on GitHub Pages
+      </p>
+    </div>
+  </footer>
+</body>
+</html>
