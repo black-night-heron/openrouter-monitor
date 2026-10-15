@@ -6,8 +6,7 @@
  * tab's benchmark leaderboard + capability radar.
  */
 
-// Static JSON snapshots on the gh-pages branch, regenerated every 10
-// minutes by the Pages workflow. GitHub's CDN gzips them in transit.
+// data/*.json snapshots, regenerated on gh-pages every 10 min by the Pages workflow.
 let dashboard = null      // {generatedAt, summary, models} from data/dashboard.json
 let uptimePayload = null  // columnar grid from data/uptime.json (lazily fetched)
 let uptimeLoaded = false  // Trends tab opened at least once
@@ -17,11 +16,11 @@ const $ = (s) => document.querySelector(s)
 const $$ = (s) => document.querySelectorAll(s)
 
 // ── State ───────────────────────────────────────────────────────────────────
-let allModels = []        // normalised models from dashboard.json
-let allRows = []          // flat (model, provider) view derived for the table
+let allModels = []
+let allRows = []          // flat (model, provider) view — one table row per provider
 let uptimeChart = null
 let radarChart = null
-let selectedModelIds = new Set()  // set of permaslugs (model ids); chart keyed by them
+let selectedModelIds = new Set()  // keyed by permaslug (model id), not bare slug
 // Seed the default top-5 selection on first load only, so a manual
 // "deselect all" survives the 10-minute auto-refresh.
 let hasInitializedSelection = false
@@ -41,7 +40,7 @@ let expandedBenchIds = new Set()
 let benchSortColumn = 'intelligence_index'
 let benchSortDesc = true
 let benchSearchTimer = null
-let benchHasLoaded = false           // render the leaderboard lazily on first Compare tab open
+let benchHasLoaded = false
 
 // ── Design Arena drawer constants ──────────────────────────────────────────
 // Fixed Elo scale keeps bar lengths comparable across models.
@@ -112,8 +111,6 @@ setupRefreshControls()
 setupNotes()
 setupScrollShadows()
 refresh()
-// Re-decode the snapshot every 10 min, in step with the workflow that
-// regenerates it.
 setInterval(refresh, REFRESH_INTERVAL_MS)
 // Keeps the "Last updated" stamp counting down between polls.
 setInterval(renderLastUpdated, 30_000)
@@ -151,7 +148,6 @@ async function refresh() {
     allModels = data.models || []
     allRows = flattenModels(allModels)
 
-    // Seed top-5 selection only on first load; don't resurrect on auto-refresh
     if (!hasInitializedSelection && selectedModelIds.size === 0) {
       const picks = topByUptime(allModels, 5)
       if (picks.length < 5) {
@@ -168,8 +164,7 @@ async function refresh() {
     renderModels(allRows)
     populateOwnerFilters(allModels)
     populateModelSelect(allModels)
-    // Keep already-open tabs in sync; the Trends chart fetches its grid
-    // lazily the first time that tab is opened.
+    // Keep already-open tabs in sync; the lazily-fetched grid refetches on reset.
     if (uptimeLoaded) {
       uptimePayload = null
       loadModelUptimeChart()
@@ -182,7 +177,6 @@ async function refresh() {
   }
 }
 
-/** Lazily fetch the columnar uptime grid. */
 async function ensureUptime() {
   if (!uptimePayload) uptimePayload = await fetchJson('data/uptime.json')
   return uptimePayload
@@ -251,9 +245,8 @@ function setupNotes() {
 }
 
 // ── Scroll shadows ──────────────────────────────────────────────────────────
-/** Toggle a shadow on any `.table-wrap` that overflows horizontally, so
- *  clipped columns are discoverable. Hidden panels report clientWidth 0,
- *  so re-measure on tab switch and resize. */
+/** Shadow on `.table-wrap` when it overflows, so clipped columns stay
+ *  discoverable. Hidden tabs report clientWidth 0, so re-measure on switch. */
 function updateScrollShadows() {
   $$('[data-scroll-shadow]').forEach((el) => {
     el.classList.toggle('is-scrollable-x', el.clientWidth > 0 && el.scrollWidth > el.clientWidth + 1)
@@ -294,7 +287,6 @@ function renderSummary(summary) {
     if (dot) dot.style.background = neutral
   }
 
-  // Stash the absolute timestamp for the relative-time ticker.
   lastUpdatedAt = summary.lastUpdated ? new Date(summary.lastUpdated).getTime() : null
   renderLastUpdated()
 
@@ -343,13 +335,11 @@ function renderModels(rows) {
     if (countEl) countEl.textContent = ''
     return
   }
-  // Hide the default empty message until we know we have rows.
   empty.style.display = 'none'
 
   const searchTerm = ($('#model-search').value || '').toLowerCase()
   const ownerFilter = $('#owner-filter').value
 
-  // Sub-sort tiebreaker: when primary sort is equal, sort by name asc then provider asc
   function subSort(a, b) {
     const n = a.name.localeCompare(b.name)
     if (n !== 0) return n
@@ -470,7 +460,6 @@ function renderModels(rows) {
   updateScrollShadows()
 }
 
-/** Render a 24h availability value as a colour-coded badge. */
 function availabilityBadge(value, tooltip) {
   if (value == null) return '<span class="text-muted">—</span>'
   const title = tooltip ? ` title="${escAttr(tooltip)}"` : ''
@@ -557,7 +546,6 @@ function formatContext(n) {
   return String(n)
 }
 
-/** X-axis tick label for the numeric {x, y} scale. */
 function formatXTick(val, hours) {
   const dt = new Date(val)
   if (hours <= 24) {
@@ -617,13 +605,8 @@ function truncateLabel(s, max = 26) {
   return s.length > max ? s.slice(0, max - 1) + '…' : s
 }
 
-/**
- * Destroy whatever Chart.js currently owns a canvas.
- *
- * A locally-held reference is not enough: if `new Chart()` throws part-way
- * through construction it has already registered itself on the canvas, and
- * every later attempt then fails with "Canvas is already in use".
- */
+/** Destroy any Chart.js instance on a canvas — a held reference is not enough,
+ *  since a failed `new Chart()` still registers it ("Canvas is already in use"). */
 function destroyChartOn(canvas) {
   if (!canvas) return
   const existing = Chart.getChart(canvas)
@@ -650,8 +633,6 @@ async function loadModelUptimeChart() {
   }
 
   try {
-    // The uptime grid is fetched lazily on first Trends visit; window and
-    // model filtering then happen client-side on the 30-day columnar grid.
     const uptime = await ensureUptime()
     const data = sliceUptime(uptime, hours, [...selectedModelIds])
 
@@ -666,8 +647,7 @@ async function loadModelUptimeChart() {
       return
     }
 
-    // Parallel arrays → {x, y} pairs, which the linear x-scale consumes
-    // directly. Each model contributes one routing-layer aggregate series.
+    // Each model contributes one routing-layer aggregate series.
     const timestamps = Array.isArray(data.timestamps) ? data.timestamps : []
     const CHART_COLORS = getChartColors()
     const t = chartTheme()
@@ -709,8 +689,7 @@ async function loadModelUptimeChart() {
       maintainAspectRatio: false,
       animation: false,
       interaction: { intersect: false, mode: 'index' },
-      // Data is already in {x, y} form. Skipping parsing is both cheaper and
-      // what keeps `ctx.raw` the raw object the tooltip callbacks read.
+      // Skipping parsing is cheaper and keeps `ctx.raw` the {x, y} object.
       parsing: false,
       plugins: {
         legend: {
@@ -862,8 +841,7 @@ function updateModelSelectText() {
 }
 
 function selectAllModels() {
-  // Select every model — no silent truncation. (topByUptime is
-  // reserved for the top-5 picks where ranking matters.)
+  // Select every model — no silent truncation (topByUptime is for the ranked top-5).
   selectedModelIds.clear()
   for (const m of allModels) selectedModelIds.add(m.id)
   syncCheckboxes()
@@ -1089,7 +1067,6 @@ async function refreshBenchmarks() {
   try {
     const data = await fetchJson('data/benchmarks.json')
     benchmarkRows = (data && data.models) || []
-    // Prune pins and open drawers whose model vanished from the dataset.
     const validIds = new Set(benchmarkRows.map((m) => m.id))
     for (const id of [...radarSelectedIds]) {
       if (!validIds.has(id)) radarSelectedIds.delete(id)
@@ -1120,7 +1097,6 @@ function setupBenchTableSort() {
         benchSortDesc = !benchSortDesc
       } else {
         benchSortColumn = col
-        // Default desc for numeric metrics, asc for name/rank
         benchSortDesc = col !== 'name' && col !== 'rank'
       }
       headers.forEach((h) => {
@@ -1195,7 +1171,6 @@ function renderBenchmarks() {
       const bv = b.maxCompletionTokens ?? -1
       return benchSortDesc ? bv - av : av - bv
     }
-    // Numeric metric axis (intelligence/coding/agentic)
     const av = metricValue(a, benchSortColumn)
     const bv = metricValue(b, benchSortColumn)
     if (av == null && bv == null) return a.name.localeCompare(b.name)
@@ -1217,10 +1192,8 @@ function renderBenchmarks() {
 
     const rank = rankByMetric.get(m.id)
     const rankStr = rank != null ? `#${rank}` : '—'
-    // Chevron toggle for the Design Arena drawer. A native <button> gets
-    // Enter/Space for free and avoids the double-toggle risk of a span.
-    // Rows without arena data render an invisible placeholder in the same
-    // slot so rank offset, column width and row height stay identical.
+    // Native <button> gives Enter/Space + avoids span double-toggle; rows without
+    // arena data keep an invisible placeholder so column width/row height stay identical.
     const chevron = hasArena
       ? `<button type="button" class="bench-chevron${isExpanded ? ' is-expanded' : ''}" aria-expanded="${isExpanded}" aria-label="Toggle Design Arena details for ${escAttr(m.name)}">${isExpanded ? '▾' : '▸'}</button>`
       : '<span class="bench-chevron-slot" aria-hidden="true"></span>'
@@ -1259,8 +1232,6 @@ function renderBenchmarks() {
     })
     frag.appendChild(tr)
 
-    // Full-width drawer row below the model row, rendered only when
-    // expanded AND arena data exists.
     if (isExpanded && hasArena) {
       const drawer = document.createElement('tr')
       drawer.classList.add('bench-drawer-row')
@@ -1316,15 +1287,11 @@ function scoreColor(v) {
 }
 
 // ── Design Arena labels ──────────────────────────────────────────────────────
-// OpenRouter's /api/v1/models returns bare slugs for both fields
-// (`arena: "models"`, `category: "codecategories"`) with no display name, so
-// the human-readable forms live here. 25 categories as of 2026-10; three are
-// format-qualified variants that share a base name.
+// OpenRouter's /api/v1/models returns bare slugs (e.g. `arena: "models"`) with
+// no display name, so readable forms live here. 25 categories as of 2026-10.
 const ARENA_LABELS = {
-  // arenas
   models: 'Models',
   agents: 'Agents',
-  // categories
   website: 'Website',
   webapps: 'Web Apps',
   mobileapps: 'Mobile Apps',
@@ -1352,11 +1319,8 @@ const ARENA_LABELS = {
   agentichtmlslides: 'Agentic HTML Slides',
 }
 
-/**
- * Display label for an arena or category slug. An unmapped slug degrades to a
- * separator-aware title case ("some-new_category" → "Some New Category") so a
- * category added upstream shows up readable instead of leaking raw casing.
- */
+/** Label for an arena/category slug; unmapped slugs degrade to title case so a
+ *  new upstream category reads cleanly instead of leaking raw casing. */
 function arenaLabel(slug) {
   if (!slug) return ''
   const known = ARENA_LABELS[slug]
@@ -1385,9 +1349,8 @@ function renderTopArena(designArena) {
 
 // ── Design Arena drawer (expandable per-row detail) ─────────────────────────
 
-/** Toggle a leaderboard row's Design Arena drawer. Re-renders the table,
- *  then restores focus to the new chevron — the re-render destroyed the
- *  one the keyboard user just activated. */
+/** Toggle a row's Design Arena drawer. Re-renders, then restores focus to the
+ *  new chevron — the re-render destroyed the one the keyboard user activated. */
 function toggleBenchDrawer(id) {
   if (expandedBenchIds.has(id)) expandedBenchIds.delete(id)
   else expandedBenchIds.add(id)
@@ -1396,7 +1359,6 @@ function toggleBenchDrawer(id) {
   if (chev instanceof HTMLElement) chev.focus()
 }
 
-/** Group arena entries by arena, each sorted by Elo descending. */
 function groupArenaEntries(designArena) {
   const byArena = new Map()
   for (const e of designArena) {
@@ -1412,7 +1374,6 @@ function groupArenaEntries(designArena) {
   return groups
 }
 
-/** Tiered Elo colour on the Design Arena scale. */
 function arenaEloColor(elo) {
   if (elo >= 1400) return 'var(--green)'
   if (elo >= 1300) return 'var(--lime)'
@@ -1427,7 +1388,6 @@ function arenaEloWidth(elo) {
   return Math.max(2, Math.min(100, pct))
 }
 
-/** Full-width Design Arena drawer: one bar section per arena group. */
 function renderBenchDrawer(m) {
   const entries = m.designArena || []
   const groups = groupArenaEntries(entries)
@@ -1476,12 +1436,8 @@ function renderBenchDrawer(m) {
     </div>`
 }
 
-/**
- * Stacked "Limits" cell: input context on top, max output below. They
- * answer different questions ("how much can I send?" vs "how much can it
- * write back?"), and a 1M-context model with a 128K output cap behaves
- * nothing like one that can emit 1M.
- */
+/** Stacked "Limits" cell: context length over max output — a 1M-context model
+ *  with a 128K output cap is not the same as one that can emit 1M. */
 function renderLimits(contextLength, maxCompletionTokens) {
   const ctx = formatContext(contextLength)
   const out = formatContext(maxCompletionTokens)
@@ -1502,10 +1458,8 @@ function renderModalityBadges(inputMods, outputMods) {
   return `${inChips.join('')}<span class="mod-arrow" aria-hidden="true">→</span>${outChips.join('')}`
 }
 
-/**
- * Capability chips from `supported_parameters`. Capped at 4 — a model
- * typically supports ~11 parameters, and an uncapped row is noise.
- */
+/** Capability chips from `supported_parameters`, capped at 4 — a model
+ *  typically supports ~11, and an uncapped row is noise. */
 const CAPABILITY_CHIPS = [
   { key: 'tools', label: 'Tool', title: 'Accepts tool / function calls' },
   { key: 'structured_outputs', label: 'JSON', title: 'Returns structured JSON output' },
@@ -1704,19 +1658,13 @@ function esc(str) {
   return div.innerHTML
 }
 
-/** Capitalise the first letter of a display name; the raw slug stays in
- *  `title` attributes where exactness matters. */
 function capitalize(s) {
   if (!s) return ''
   return String(s).charAt(0).toUpperCase() + String(s).slice(1)
 }
 
-/**
- * Best display label for an owner slug. Prefer the vendor's own
- * `provider_name` casing ("thinkingmachines" → "Thinking Machines"), but
- * only when the provider really IS that vendor — `dots-studio` is hosted
- * by "AtlasCloud", so a naive lookup mislabels it.
- */
+/** Best label for an owner slug: the vendor's own `provider_name` casing, but only
+ *  when the provider's slug prefix matches the owner (else `dots-studio` mislabels as "AtlasCloud"). */
 let ownerLabelCache = { rows: null, map: new Map() }
 
 function ownerLabelMap() {
@@ -1742,7 +1690,6 @@ function ownerLabel(owner) {
   return firstParty || titleCaseSlug(owner)
 }
 
-/** Title-case a hyphenated/underscored slug: "dots-studio" → "Dots Studio". */
 function titleCaseSlug(slug) {
   return String(slug)
     .split(/[-_]+/)
@@ -1751,7 +1698,6 @@ function titleCaseSlug(slug) {
     .join(' ')
 }
 
-/** Normalise a slug-ish string for comparison: lowercase, alphanumerics only. */
 function normSlug(s) {
   return String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '')
 }

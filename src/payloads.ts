@@ -1,12 +1,11 @@
 /**
- * Payload builders — the single source of truth for the static site's
- * JSON data files. The collector (scripts/collect-data.ts) passes each
- * run's Dataset through these builders and writes the results to
- * site/data/; the browser fetches the same shapes directly.
+ * Payload builders — the shapes of the static site's JSON data files.
+ * scripts/collect-data.ts passes each run's Dataset through these builders
+ * and writes the results to site/data/; the browser fetches the same shapes.
  *
- * Shapes are normalised for a static consumer: camelCase fields,
- * models with nested providers (no flat row fan-out), and a columnar
- * uptime grid (shared timestamps via t0/step/n).
+ * Normalised for a static consumer: camelCase fields, models with nested
+ * providers (no flat row fan-out), and a columnar uptime grid that shares
+ * one timestamp axis via t0/step/n.
  */
 
 import type { BenchmarkEntry } from './openrouter.js'
@@ -26,11 +25,10 @@ export interface ProviderEntry {
   dataLogged: 0 | 1 | null
 }
 
-/** One free model with its deployment providers nested.
- *  The availability figures are always real measurements: either collected
- *  this tick or carried forward from the previous dashboard.json. A model
- *  that has never been measured is simply left out of `models` — the payload
- *  has no "no data" placeholder, so a failed fetch can never be read as 0%. */
+/** One free model with its deployment providers nested. Every availability
+ *  figure is a real measurement — this tick's or carried forward from the
+ *  previous dashboard.json. A model with neither is left out of `models`
+ *  rather than published with a placeholder. */
 export interface StatusModel {
   id: string                    // permaslug
   variant: string
@@ -87,14 +85,12 @@ function round2(v: number): number {
   return Math.round(v * 100) / 100
 }
 
-
 /** Round to 1 decimal — KPI bar precision. */
 function round1(v: number): number {
   return Math.round(v * 10) / 10
 }
 
-/** Stable publish order: owner, then name (matches the previous SQL
- *  ORDER BY's binary collation). */
+/** Stable publish order: owner, then name. */
 function compareModelOrder(a: CollectedModel, b: CollectedModel): number {
   if (a.owner !== b.owner) return a.owner < b.owner ? -1 : 1
   if (a.name !== b.name) return a.name < b.name ? -1 : 1
@@ -112,8 +108,7 @@ function toProviderEntry(p: CollectedModel['providers'][number]): ProviderEntry 
 }
 
 export function buildStatusPayload(data: Dataset): StatusPayload {
-  // model_benchmarks is keyed by the bare slug; free models join on it
-  // to pick up their intelligence index.
+  // Keyed by the bare slug: a model can have both free and paid variants.
   const intelligenceBySlug = new Map<string, number | null>(
     data.benchmarks.map((b) => [b.id, b.intelligenceIndex]),
   )
@@ -123,11 +118,8 @@ export function buildStatusPayload(data: Dataset): StatusPayload {
   const models: StatusModel[] = []
   for (const m of sorted) {
     for (const p of m.providers) providerSlugs.add(p.slug)
-    // The four figures come from one availability fetch, so they are either
-    // all present or all absent. Absent means the fetch failed this tick and
-    // the previous dashboard.json had nothing to carry forward (a model that
-    // just appeared on the free list) — skip the row rather than publish a
-    // made-up number.
+    // The four figures come from one fetch, so they are all present or all
+    // absent — absent means unmeasurable and the row is skipped.
     if (
       m.uptime1dAvg == null ||
       m.uptime == null ||
@@ -154,10 +146,8 @@ export function buildStatusPayload(data: Dataset): StatusPayload {
     })
   }
 
-  // Unweighted means of per-model figures for the KPI bar. uptimePercent
-  // is the 24h bucket mean; availabilityPercent is OpenRouter's own
-  // request-weighted figure. Only published rows count, so a missing
-  // fetch cannot pull the average toward 0.
+  // KPI bar: unweighted means over published rows only, so an unmeasurable
+  // model cannot pull the average toward 0.
   const measured = models.length
   const lastUpdated = measured > 0
     ? models.reduce((acc, m) => (m.updatedAt > acc ? m.updatedAt : acc), models[0]!.updatedAt)
@@ -194,16 +184,14 @@ export function buildBenchmarksPayload(
   benchmarks: BenchmarkEntry[],
   freeSlugs: Set<string>,
 ): BenchmarkPayload[] {
-  // A Set lookup, not a scan: a model can have a free variant AND paid
-  // variants, so the match is on the bare slug.
   const payload = benchmarks.map((b) => ({ ...b, isFree: freeSlugs.has(b.id) }))
   payload.sort(compareBenchOrder)
   return payload
 }
 
-/** Fallback path: this tick's benchmark fetch failed, so re-publish the
- *  previous leaderboard with isFree re-derived against the current free
- *  set (a model can join or leave the free list between runs). */
+/** Fallback when this tick's benchmark fetch failed: republish the previous
+ *  leaderboard with isFree re-derived, since a model can join or leave the
+ *  free list between runs. */
 export function reuseBenchmarkLeaderboard(
   prev: BenchmarkPayload[],
   freeSlugs: Set<string>,
@@ -227,17 +215,12 @@ export function buildUptimeGridRows(data: Dataset): UptimeGridRow[] {
 // ── Cross-run 30-day merge ─────────────────────────────────────────────
 
 /**
- * Merge the previous uptime.json (the seed carried on the gh-pages
- * branch) with this tick's fresh buckets:
- *  - models no longer on the free list are dropped,
- *  - buckets older than the 30-day retention are dropped,
- *  - fresh buckets overwrite same-(model, timestamp) entries — the
- *    upstream rolling window means most points are simply refreshed,
- *    never double-counted,
- *  - fresh values are rounded to 1 decimal (display precision).
- *
- * `metaFor` resolves owner/name for models appearing for the first time
- * (the collector passes a lookup built from the status payload).
+ * Merge the previous uptime.json (the seed carried on the gh-pages branch)
+ * with this tick's fresh buckets, dropping offline models and buckets past
+ * the 30-day retention. Fresh buckets overwrite the same (model, timestamp):
+ * the upstream window is rolling, so most points are refreshed rather than
+ * duplicated. `metaFor` supplies owner/name for models seen for the first
+ * time.
  */
 export function mergeUptimePayload(
   prev: UptimePayload | null,

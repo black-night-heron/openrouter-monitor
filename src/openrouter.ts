@@ -1,26 +1,23 @@
 /**
- * OpenRouter API client — fetches the free-models catalog, parses
- * per-model / per-provider deployment metadata, and pulls the
- * availability timeseries that backs the uptime chart.
+ * OpenRouter API client — free-models catalog, per-model / per-provider
+ * deployment metadata, and the availability timeseries backing the uptime
+ * chart (GET /api/frontend/v1/stats/model-uptime-recent: ~24h of 10-minute
+ * buckets plus request-weighted summary fields).
  *
- * Availability comes from GET /api/frontend/v1/stats/model-uptime-recent,
- * which returns ~24h of 10-minute buckets plus request-weighted summary
- * fields. Ingestion policy (applied HERE and nowhere else):
- *   1. Routing metric only — the bucket/summary field
- *      `availabilityWithoutRouting` is dropped at parse time and never
- *      published.
- *   2. Null == 0 — AVAILABILITY ONLY. A null/omitted availability value
- *      (bucket or summary field) is coerced to 0 here. Every other
- *      numeric field (benchmark scores, prices, provider metadata)
- *      keeps null semantics and propagates as null. This covers values
- *      inside a response that DID arrive; a model whose request failed
- *      outright yields no figures at all (see collect.ts), which is not
- *      the same as a measured 0%.
+ * Ingestion policy, applied HERE and nowhere else:
+ *   1. Routing metric only — `availabilityWithoutRouting` is dropped at parse
+ *      time and never published.
+ *   2. Null == 0, for AVAILABILITY ONLY. A null/omitted availability value
+ *      (bucket or summary field) is coerced to 0 here; every other numeric
+ *      field (benchmark scores, prices, provider metadata) keeps null
+ *      semantics. This covers values inside a response that DID arrive — a
+ *      failed request yields no figures at all (see collect.ts), which is not
+ *      a measured 0%.
  */
 
-/** A `benchmarks.design_arena` entry — Chatbot-Arena-style pairwise Elo
- *  per category. Unvalidated upstream JSON; consumers guard missing
- *  values at render time. */
+/** A `benchmarks.design_arena` entry — pairwise Elo per category, from the
+ *  Chatbot-Arena-style leaderboards. Unvalidated upstream JSON; consumers
+ *  guard missing values at render time. */
 export interface DesignArenaEntry {
   arena: string      // "agents" | "models"
   category: string   // e.g. "webapps", "dataviz", "3d"
@@ -118,12 +115,8 @@ interface FrontendModelsResponse {
   data: FrontendModel[]
 }
 
-// 15s timeout for external API fetches
 const DEFAULT_FETCH_TIMEOUT = 15_000
 
-/**
- * Fetch with an AbortController timeout.
- */
 async function fetchWithTimeout(url: string, opts: RequestInit & { timeout?: number } = {}): Promise<Response> {
   const { timeout = DEFAULT_FETCH_TIMEOUT, ...rest } = opts
   const controller = new AbortController()
@@ -136,17 +129,14 @@ async function fetchWithTimeout(url: string, opts: RequestInit & { timeout?: num
   }
 }
 
-/** Statuses worth another attempt: rate limiting and upstream flakiness.
- *  A 4xx other than 429 is a permanent answer (bad slug, blocked client)
- *  and retrying it only wastes the request budget. */
+/** Rate limiting and upstream flakiness are worth another attempt; any other
+ *  4xx is a permanent answer (bad slug, blocked client). */
 const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504])
 
 /**
- * Fetch with retry logic wrapping fetchWithTimeout.
- * Retries network/connection errors (thrown fetch exceptions) and
- * retryable HTTP statuses. Uses exponential backoff: 1s, 2s, 4s between
- * retries. The last response is returned as-is once the retries run out,
- * so callers still see the status code.
+ * fetchWithTimeout with exponential backoff (1s, 2s) on thrown errors and
+ * retryable statuses. Once retries run out the last response is returned
+ * as-is, so callers still see its status code.
  */
 async function fetchWithRetry(
   url: string,
@@ -180,10 +170,9 @@ async function fetchWithRetry(
 }
 
 /**
- * Run async tasks with a concurrency limit. Soft-fail: individual errors
- * are logged but don't abort remaining items. Slots whose callback threw
- * stay `undefined` — typed as such so callers must null-check rather
- * than rely on a slot that wasn't actually written.
+ * Run async tasks with a concurrency limit. Soft-fail: a throwing callback
+ * logs and leaves its slot `undefined` — typed that way so callers must
+ * null-check instead of trusting an unwritten slot.
  */
 export async function pMap<T, R>(
   items: readonly T[],
@@ -211,9 +200,6 @@ export async function pMap<T, R>(
   return results
 }
 
-/**
- * Fetch the full model list from OpenRouter's frontend catalog API.
- */
 export async function fetchModels(): Promise<FrontendModel[]> {
   const headers: Record<string, string> = {
     'User-Agent': 'OpenRouter-Monitor/1.0',
@@ -233,11 +219,9 @@ export async function fetchModels(): Promise<FrontendModel[]> {
 }
 
 // ============================================================================
-// /api/v1/models — public catalog with embedded `benchmarks` per model.
-// Used by the Compare tab to populate the model_benchmarks table. Distinct
-// from fetchModels() above (the frontend catalog endpoint): /api/v1/models
-// is the public, OpenAI-compatible model list and is the only OpenRouter
-// endpoint that embeds Artificial Analysis + Design Arena scores.
+// /api/v1/models — the public, OpenAI-compatible model list, and the only
+// OpenRouter endpoint that embeds Artificial Analysis + Design Arena scores.
+// Backs the Compare tab. Distinct from the frontend catalog endpoint above.
 // ============================================================================
 
 /** `benchmarks.artificial_analysis` — aggregate capability indices, 0-100. */
@@ -292,16 +276,15 @@ interface V1ModelsResponse {
   data: V1Model[]
 }
 
-/** Parse a per-token USD pricing string (e.g. "0.000005", "0") into a REAL.
- *  Returns 0 for free models, null when the string is missing/unparseable. */
+/** Per-token USD pricing arrives as a string ("0.000005", "0"); null when
+ *  missing or unparseable. */
 function parsePrice(raw: string | undefined): number | null {
   if (raw == null) return null
   const n = Number(raw)
   return Number.isFinite(n) && n >= 0 ? n : null
 }
 
-/** Coerce an availability value to a number; null/undefined/non-finite
- *  become 0. Availability only — every other metric keeps null semantics. */
+/** Implements ingestion policy rule 2: unavailable availability is 0. */
 function toAvailability(v: unknown): number {
   return typeof v === 'number' && Number.isFinite(v) ? v : 0
 }
@@ -330,10 +313,9 @@ function stringArray(raw: unknown): string[] {
 }
 
 /**
- * Fetch /api/v1/models and flatten to benchmark entries. Only models with
- * a non-empty `benchmarks` object are returned — an entry without a score
- * would only clutter the leaderboard. Throws on a network error or
- * non-2xx response; the caller reuses the previous leaderboard on failure.
+ * Fetch /api/v1/models and flatten to benchmark entries, keeping only models
+ * with at least one score. Throws on a network error or non-2xx; the caller
+ * then reuses the previous leaderboard.
  */
 export async function fetchBenchmarkModels(): Promise<BenchmarkEntry[]> {
   const resp = await fetchWithRetry('https://openrouter.ai/api/v1/models', {
@@ -363,7 +345,6 @@ export async function fetchBenchmarkModels(): Promise<BenchmarkEntry[]> {
       typeof aa.agentic_index === 'number'
     )
     const hasDA = Array.isArray(da) && da.length > 0
-    // Skip models with neither an AA index nor Design Arena entries.
     if (!hasAA && !hasDA) continue
 
     entries.push({
@@ -394,13 +375,9 @@ export function isFreeModel(model: FrontendModel): boolean {
   return model.endpoint?.is_free === true && model.endpoint?.variant === 'free'
 }
 
-/** Extracts the slash-prefix owner from a model slug.
- * e.g. "google/gemma-4-31b-it" → "google".
- *
- * Slugs without a `/` (or with an empty prefix like `"/foo"`)
- * resolve to 'unknown' so malformed input never produces an empty
- * owner that would silently break owner-based filtering.
- */
+/** The slash-prefix owner of a model slug ("google/gemma-4-31b-it" → "google").
+ *  Malformed slugs return 'unknown' rather than '', which would silently
+ *  break owner-based filtering. */
 export function extractOwner(modelSlug: string): string {
   const prefix = modelSlug.split('/')[0]
   if (!prefix) {
@@ -410,13 +387,12 @@ export function extractOwner(modelSlug: string): string {
   return prefix
 }
 
-/** Tri-state booleans for the model_providers schema. */
+/** Tri-state data-policy flags; null = unknown. */
 interface DataPolicyFlags {
   data_trained: 0 | 1 | null
   data_logged: 0 | 1 | null
 }
 
-/** Map a DataPolicy to tri-state booleans. */
 function extractDataPolicy(dp: DataPolicy | undefined | null): DataPolicyFlags {
   return {
     data_trained: typeof dp?.training === 'boolean' ? (dp.training ? 1 : 0) : null,
@@ -433,9 +409,9 @@ interface AllProvidersResponse {
 }
 
 /**
- * Fetch per-provider dataPolicy flags from `/all-providers`.
- * Fail-hard: aborts the tick to avoid collapsing a `/all-providers`
- * outage into indistinguishable "trains?/logs?" across all models.
+ * Per-provider dataPolicy flags from `/all-providers`. Fail-hard: an outage
+ * here would collapse into "trains?/logs?" across every model, indistinguishable
+ * from a real answer.
  */
 export async function fetchProviderPolicies(): Promise<Map<string, DataPolicyFlags>> {
   const resp = await fetchWithRetry(
@@ -449,9 +425,6 @@ export async function fetchProviderPolicies(): Promise<Map<string, DataPolicyFla
   )
 
   if (!resp.ok) {
-    // Match fetchModels: surface the response body in addition to the
-    // status code so an operator debugging an `/all-providers` outage
-    // has the upstream JSON error without having to re-curl manually.
     throw new Error(
       `fetchProviderPolicies: OpenRouter returned ${resp.status}: ${await resp.text().catch(() => '')}`,
     )
@@ -489,8 +462,9 @@ export interface EndpointProviderStats {
   maxCompletionTokens: number | null
 }
 
-/** Fetch the deployment-provider list for a (permaslug, variant).
- *  Throws on failure so the txn aborts before wiping model_providers. */
+/** The deployment-provider list for a (permaslug, variant).
+ *  Throws so the whole tick aborts — a partial provider list must not be
+ *  published as the truth. */
 export async function fetchEndpointStats(
   permaslug: string,
   variant: string = 'free'
@@ -512,11 +486,8 @@ export async function fetchEndpointStats(
 
   const json = await resp.json() as EndpointStatsResponse
   const providers = json.data ?? []
-  // A reported context_length of 0 means "not applicable", not "no data":
-  // upstream returns 0 for non-text models (e.g. respan/span-01-lite is a
-  // behaviour-scoring model with has_text_output=false). Normalising to null
-  // makes it render as "—" and sort with the unknowns instead of claiming
-  // the model has a zero-token context window.
+  // Upstream reports context_length 0 for non-text models — that means "not
+  // applicable", not a zero-token window. Null renders it with the unknowns.
   const positive = (v: number | null | undefined) =>
     typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : null
   return providers.map((p) => ({
@@ -549,12 +520,9 @@ export type ModelUptimeResult =
   | { status: 'no-data' }
   | { status: 'error'; reason: string }
 
-/** Response from GET /api/frontend/v1/stats/model-uptime-recent.
- *  `buckets` covers a rolling ~24h window at 10-minute resolution;
- *  the summary fields are request-weighted aggregates over the
- *  upstream's own window (not simple bucket means). Only the
- *  routing-layer `availability` metric is read —
- *  `availabilityWithoutRouting` is intentionally ignored. */
+/** Response from GET /api/frontend/v1/stats/model-uptime-recent: a rolling
+ *  ~24h of 10-minute buckets, plus request-weighted summaries over the
+ *  upstream's own window (not simple bucket means). */
 interface ModelUptimeRecentResponse {
   data?: {
     buckets?: Array<{
@@ -567,9 +535,9 @@ interface ModelUptimeRecentResponse {
   }
 }
 
-/** Parse an API bucket timestamp ("2026-10-11 07:40:00", UTC) to epoch ms.
- *  Returns null for missing/malformed values — such buckets are dropped
- *  by the caller rather than silently landing at epoch 0. */
+/** Bucket timestamp ("2026-10-11 07:40:00", UTC) → epoch ms. Null for
+ *  malformed values, so the caller drops the bucket instead of landing it
+ *  at epoch 0. */
 function parseBucketTimestamp(raw: string | undefined): number | null {
   if (!raw) return null
   const ms = Date.parse(`${raw.replace(' ', 'T')}Z`)
@@ -577,13 +545,9 @@ function parseBucketTimestamp(raw: string | undefined): number | null {
 }
 
 /**
- * Fetch the recent availability timeseries for a (permaslug, variant)
- * from OpenRouter's model-uptime-recent endpoint.
- *
- * Non-throwing: always resolves to a ModelUptimeResult member so the
- * collector can soft-fail per model (a partial outage must not abort the
- * tick). Retries network-class errors via fetchWithRetry; a non-2xx
- * response or an unparseable body resolves to { status: 'error' }.
+ * Recent availability timeseries for a (permaslug, variant). Non-throwing:
+ * a non-2xx response or an unparseable body resolves to { status: 'error' },
+ * so a partial outage cannot abort the tick.
  */
 export async function fetchModelUptimeRecent(
   permaslug: string,
@@ -631,7 +595,6 @@ export async function fetchModelUptimeRecent(
     if (ts == null) continue
     buckets.push({
       timestamp: ts,
-      // null == 0 policy (availability only); availabilityWithoutRouting is never read.
       availability: toAvailability(b?.availability),
     })
   }

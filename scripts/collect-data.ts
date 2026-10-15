@@ -2,18 +2,12 @@
 /**
  * collect-data.ts — CI entry point (GitHub Actions, every 10 minutes).
  *
- * Pipeline:
- *   1. Load the previous snapshots from the gh-pages branch (the
- *      "seed") when present: uptime.json carries the 30-day history,
- *      benchmarks.json is the fallback for a failed benchmark fetch,
- *      dashboard.json is the fallback for failed availability fetches.
- *   2. Run one collector pass (src/collect.ts — plain data, no database).
- *   3. Build the payloads; merge this tick's fresh buckets into the
- *      30-day grid, prune >30d & offline models.
- *   4. Write the JSON data files and assemble site/.
+ * Loads the previously published JSON from the gh-pages branch as a "seed"
+ * (uptime history, benchmark and availability fallbacks), runs one collector
+ * pass, builds the payloads and assembles site/.
  *
- * Any failure exits non-zero so the workflow aborts without deploying;
- * the previously published gh-pages content stays online.
+ * Any failure exits non-zero so the workflow aborts without deploying and the
+ * published gh-pages content stays online.
  *
  * Env:
  *   SEED_DIR  directory containing a previous uptime.json,
@@ -96,10 +90,9 @@ function loadStatusSeed(path: string): Map<string, StatusModel> | null {
 }
 
 /**
- * Keep the last published figures for models whose availability fetch
- * failed this tick. A missing measurement is not 0% availability, and the
- * `updatedAt` moves with the figures so the table shows when they were
- * actually measured. Returns how many rows were carried forward.
+ * Reuse the last published figures for models whose availability fetch failed
+ * this tick; `updatedAt` moves with them so the table shows when they were
+ * really measured. Returns the number of rows carried forward.
  */
 function carryForwardFigures(models: CollectedModel[], prev: Map<string, StatusModel> | null): number {
   if (!prev) return 0
@@ -128,7 +121,7 @@ function assembleSite(): void {
 async function main(): Promise<void> {
   const now = Date.now()
 
-  // 1. Seed — the previous data files from the gh-pages branch (optional).
+  // Seed — the previous data files from the gh-pages branch (optional).
   let prevUptime: UptimePayload | null = null
   let prevBenchmarks: BenchmarkPayload[] | null = null
   let prevStatus: Map<string, StatusModel> | null = null
@@ -144,7 +137,6 @@ async function main(): Promise<void> {
     console.log('[collect-data] No seed directory — starting from an empty grid')
   }
 
-  // 2. Collector pass.
   const result = await collectOpenRouter()
   if (!result.success) {
     console.error(`[collect-data] Collector failed: ${result.error}`)
@@ -160,8 +152,7 @@ async function main(): Promise<void> {
       `${dataset.uptime.noData} no-data, ${dataset.uptime.error} errors)`,
     )
   }
-  // Failed fetch + nothing to carry forward (the model just appeared on the
-  // free list): leave it out of the table rather than publish a made-up 0%.
+  // Failed fetch with nothing to carry forward: skip the row, don't publish a 0%.
   const unmeasured = dataset.models.filter((m) => m.uptime1dAvg == null)
   if (unmeasured.length > 0) {
     console.warn(
@@ -170,7 +161,6 @@ async function main(): Promise<void> {
     )
   }
 
-  // 3. Payloads + 30-day merge.
   const status = buildStatusPayload(dataset)
   const fresh = buildUptimeGridRows(dataset)
 
@@ -195,7 +185,6 @@ async function main(): Promise<void> {
   }
   const uptime = mergeUptimePayload(prevUptime, fresh, now, liveIds, metaFor)
 
-  // 4. Write the JSON data files and assemble site/.
   assembleSite()
   const generatedAt = new Date(now).toISOString()
   const statusSize = writeJson('dashboard.json', { generatedAt, ...status })
