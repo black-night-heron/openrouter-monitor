@@ -32,10 +32,10 @@ export interface StatusModel {
   variant: string
   name: string
   owner: string                 // slash-prefix
-  uptime1dAvg: number           // 24h mean of buckets.availability (routing-layer aggregate)
-  uptime: number                // API summary: overall uptime %
-  availability: number          // API summary: overall availability %
-  recentAvailability: number    // API summary: recent availability %
+  uptime1dAvg: number | null    // 24h mean of buckets.availability (routing-layer aggregate)
+  uptime: number | null         // API summary: overall uptime %
+  availability: number | null   // API summary: overall availability %
+  recentAvailability: number | null // API summary: recent availability %
   intelligenceIndex: number | null // Artificial Analysis 0-100; null = unranked
   updatedAt: string             // ISO 8601 UTC
   providers: ProviderEntry[]
@@ -83,6 +83,11 @@ function round2(v: number): number {
   return Math.round(v * 100) / 100
 }
 
+/** round2 with the "no data" case passed through as null. */
+function round2OrNull(v: number | null): number | null {
+  return v == null ? null : round2(v)
+}
+
 /** Round to 1 decimal — KPI bar precision. */
 function round1(v: number): number {
   return Math.round(v * 10) / 10
@@ -123,10 +128,10 @@ export function buildStatusPayload(data: Dataset): StatusPayload {
       variant: m.variant,
       name: m.name,
       owner: m.owner,
-      uptime1dAvg: round2(m.uptime1dAvg),
-      uptime: round2(m.uptime),
-      availability: round2(m.availability),
-      recentAvailability: round2(m.recentAvailability),
+      uptime1dAvg: round2OrNull(m.uptime1dAvg),
+      uptime: round2OrNull(m.uptime),
+      availability: round2OrNull(m.availability),
+      recentAvailability: round2OrNull(m.recentAvailability),
       intelligenceIndex: intel == null ? null : round2(intel),
       updatedAt: m.updatedAt,
       providers: [...m.providers]
@@ -137,10 +142,21 @@ export function buildStatusPayload(data: Dataset): StatusPayload {
 
   // Unweighted means of per-model figures for the KPI bar. uptimePercent
   // is the 24h bucket mean; availabilityPercent is OpenRouter's own
-  // request-weighted figure.
+  // request-weighted figure. Models with no figure this tick are excluded
+  // from both the sum and the divisor, so a missing fetch cannot pull the
+  // average toward 0.
   const count = data.models.length
-  const mean = (pick: (m: CollectedModel) => number) =>
-    count > 0 ? data.models.reduce((acc, m) => acc + pick(m), 0) / count : null
+  const mean = (pick: (m: CollectedModel) => number | null) => {
+    let sum = 0
+    let measured = 0
+    for (const m of data.models) {
+      const v = pick(m)
+      if (v == null) continue
+      sum += v
+      measured++
+    }
+    return measured > 0 ? sum / measured : null
+  }
   const uptimeAvg = mean((m) => m.uptime1dAvg)
   const availabilityAvg = mean((m) => m.availability)
   const lastUpdated = count > 0

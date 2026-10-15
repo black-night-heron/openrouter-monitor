@@ -33,7 +33,7 @@ jobs:
               run: |
                   mkdir -p .seed
                   if git fetch origin gh-pages --depth=1 2>/dev/null; then
-                    for f in uptime benchmarks; do
+                    for f in uptime benchmarks dashboard; do
                       git show FETCH_HEAD:data/$f.json > .seed/$f.json 2>/dev/null \
                         || rm -f .seed/$f.json
                     done

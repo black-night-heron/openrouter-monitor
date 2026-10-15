@@ -38,7 +38,7 @@ npm run typecheck
 npm run collect
 ```
 
-A `collect` run without `SEED_DIR` starts with empty history. `SEED_DIR` points to a folder containing the previous `uptime.json` and `benchmarks.json`.
+A `collect` run without `SEED_DIR` starts with empty history. `SEED_DIR` points to a folder containing the previous `uptime.json`, `benchmarks.json` and `dashboard.json`.
 
 ## License
 

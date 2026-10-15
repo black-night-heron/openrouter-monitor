@@ -5,7 +5,8 @@
  * Pipeline:
  *   1. Load the previous snapshots from the gh-pages branch (the
  *      "seed") when present: uptime.json carries the 30-day history,
- *      benchmarks.json is the fallback for a failed benchmark fetch.
+ *      benchmarks.json is the fallback for a failed benchmark fetch,
+ *      dashboard.json is the fallback for failed availability fetches.
  *   2. Run one collector pass (src/collect.ts — plain data, no database).
  *   3. Build the payloads; merge this tick's fresh buckets into the
  *      30-day grid, prune >30d & offline models.
@@ -15,15 +16,15 @@
  * the previously published gh-pages content stays online.
  *
  * Env:
- *   SEED_DIR  directory containing a previous uptime.json and/or
- *             benchmarks.json (optional)
+ *   SEED_DIR  directory containing a previous uptime.json,
+ *             benchmarks.json and/or dashboard.json (optional)
  */
 
 import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { join, resolve } from 'path'
 import { fileURLToPath } from 'url'
 
-import { collectOpenRouter } from '../src/collect.js'
+import { collectOpenRouter, type CollectedModel } from '../src/collect.js'
 import {
   buildStatusPayload,
   buildBenchmarksPayload,
@@ -32,6 +33,7 @@ import {
   mergeUptimePayload,
   GRID_STEP_MS,
   type BenchmarkPayload,
+  type StatusModel,
   type UptimePayload,
 } from '../src/payloads.js'
 
@@ -80,6 +82,42 @@ function loadBenchmarksSeed(path: string): BenchmarkPayload[] | null {
   }
 }
 
+function loadStatusSeed(path: string): Map<string, StatusModel> | null {
+  try {
+    const prev = JSON.parse(readFileSync(path, 'utf8')) as { models: StatusModel[] }
+    if (!Array.isArray(prev.models)) throw new Error('unexpected shape')
+    const byId = new Map(prev.models.map((m) => [m.id, m]))
+    console.log(`[collect-data] Status seed loaded: ${byId.size} models`)
+    return byId
+  } catch (err) {
+    console.warn(`[collect-data] Status seed decode failed (${(err as Error).message})`)
+    return null
+  }
+}
+
+/**
+ * Keep the last published figures for models whose availability fetch
+ * failed this tick. A missing measurement is not 0% availability, and the
+ * `updatedAt` moves with the figures so the table shows when they were
+ * actually measured. Returns how many rows were carried forward.
+ */
+function carryForwardFigures(models: CollectedModel[], prev: Map<string, StatusModel> | null): number {
+  if (!prev) return 0
+  let carried = 0
+  for (const m of models) {
+    if (m.uptime1dAvg != null) continue
+    const p = prev.get(m.id)
+    if (!p) continue
+    m.uptime1dAvg = p.uptime1dAvg
+    m.uptime = p.uptime
+    m.availability = p.availability
+    m.recentAvailability = p.recentAvailability
+    m.updatedAt = p.updatedAt
+    carried++
+  }
+  return carried
+}
+
 function assembleSite(): void {
   rmSync(SITE_DIR, { recursive: true, force: true })
   mkdirSync(DATA_DIR, { recursive: true })
@@ -93,12 +131,15 @@ async function main(): Promise<void> {
   // 1. Seed — the previous data files from the gh-pages branch (optional).
   let prevUptime: UptimePayload | null = null
   let prevBenchmarks: BenchmarkPayload[] | null = null
+  let prevStatus: Map<string, StatusModel> | null = null
   const seedDir = process.env.SEED_DIR ? resolve(process.env.SEED_DIR) : null
   if (seedDir && existsSync(seedDir)) {
     const uptimePath = join(seedDir, 'uptime.json')
     if (existsSync(uptimePath)) prevUptime = loadUptimeSeed(uptimePath)
     const benchmarksPath = join(seedDir, 'benchmarks.json')
     if (existsSync(benchmarksPath)) prevBenchmarks = loadBenchmarksSeed(benchmarksPath)
+    const statusPath = join(seedDir, 'dashboard.json')
+    if (existsSync(statusPath)) prevStatus = loadStatusSeed(statusPath)
   } else {
     console.log('[collect-data] No seed directory — starting from an empty grid')
   }
@@ -110,6 +151,15 @@ async function main(): Promise<void> {
     process.exit(1)
   }
   const { dataset } = result
+
+  const carried = carryForwardFigures(dataset.models, prevStatus)
+  if (carried > 0) {
+    console.warn(
+      `[collect-data] Carried forward last-known availability for ${carried} model(s) ` +
+      `(fetch failed this tick; uptime counts: ${dataset.uptime.ok} ok, ` +
+      `${dataset.uptime.noData} no-data, ${dataset.uptime.error} errors)`,
+    )
+  }
 
   // 3. Payloads + 30-day merge.
   const status = buildStatusPayload(dataset)

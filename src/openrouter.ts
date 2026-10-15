@@ -12,7 +12,10 @@
  *   2. Null == 0 — AVAILABILITY ONLY. A null/omitted availability value
  *      (bucket or summary field) is coerced to 0 here. Every other
  *      numeric field (benchmark scores, prices, provider metadata)
- *      keeps null semantics and propagates as null.
+ *      keeps null semantics and propagates as null. This covers values
+ *      inside a response that DID arrive; a model whose request failed
+ *      outright yields no figures at all (see collect.ts), which is not
+ *      the same as a measured 0%.
  */
 
 /** A `benchmarks.design_arena` entry — Chatbot-Arena-style pairwise Elo
@@ -133,10 +136,17 @@ async function fetchWithTimeout(url: string, opts: RequestInit & { timeout?: num
   }
 }
 
+/** Statuses worth another attempt: rate limiting and upstream flakiness.
+ *  A 4xx other than 429 is a permanent answer (bad slug, blocked client)
+ *  and retrying it only wastes the request budget. */
+const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504])
+
 /**
  * Fetch with retry logic wrapping fetchWithTimeout.
- * Retries only on network/connection errors (thrown fetch exceptions).
- * Uses exponential backoff: 1s, 2s, 4s between retries.
+ * Retries network/connection errors (thrown fetch exceptions) and
+ * retryable HTTP statuses. Uses exponential backoff: 1s, 2s, 4s between
+ * retries. The last response is returned as-is once the retries run out,
+ * so callers still see the status code.
  */
 async function fetchWithRetry(
   url: string,
@@ -151,7 +161,13 @@ async function fetchWithRetry(
         console.warn(`[fetch] Retry ${attempt}/${retries} for ${url} in ${delay}ms...`)
         await new Promise((r) => setTimeout(r, delay))
       }
-      return await fetchWithTimeout(url, opts)
+      const resp = await fetchWithTimeout(url, opts)
+      if (RETRYABLE_STATUS.has(resp.status) && attempt < retries) {
+        console.warn(`[fetch] Attempt ${attempt + 1}/${retries + 1} got HTTP ${resp.status} for ${url}`)
+        await resp.body?.cancel().catch(() => {})
+        continue
+      }
+      return resp
     } catch (err) {
       lastError = err as Error
       if (attempt < retries) {

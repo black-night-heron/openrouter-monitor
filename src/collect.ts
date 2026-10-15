@@ -13,7 +13,9 @@
  *   3. For each, fetch /stats/model-uptime-recent (10-minute
  *      availability buckets — routing-layer metric only — plus API
  *      summary fields; null availability values are already coerced
- *      to 0 at the openrouter.ts boundary) — best-effort per model
+ *      to 0 at the openrouter.ts boundary) — best-effort per model:
+ *      a model whose fetch fails publishes no figures and no buckets,
+ *      and scripts/collect-data.ts carries forward its last known ones
  *   4. Fetch /api/v1/models for the benchmark leaderboard — best-effort
  *   5. Derive the 24h bucket mean per model
  */
@@ -78,16 +80,16 @@ export interface CollectedModel {
   name: string
   owner: string              // slash-prefix
   updatedAt: string          // ISO 8601 UTC
-  /** 24h mean of buckets.availability (routing-layer aggregate); 0 when
-   *  this tick's fetch failed (the null == 0 policy — no stored-average
-   *  fallback). Float precision is kept here; payloads.ts rounds at the
-   *  rendering layer. */
-  uptime1dAvg: number
-  /** OpenRouter's request-weighted summary fields, verbatim; 0 when the
+  /** 24h mean of buckets.availability (routing-layer aggregate); null when
+   *  this tick's fetch failed — the caller then carries forward the last
+   *  published figure rather than publishing a fabricated 0. Float
+   *  precision is kept here; payloads.ts rounds at the rendering layer. */
+  uptime1dAvg: number | null
+  /** OpenRouter's request-weighted summary fields, verbatim; null when the
    *  fetch failed this tick. */
-  uptime: number
-  availability: number
-  recentAvailability: number
+  uptime: number | null
+  availability: number | null
+  recentAvailability: number | null
   buckets: ModelUptimeBucket[]
   providers: CollectedProvider[]
 }
@@ -234,10 +236,14 @@ export async function collectOpenRouter(): Promise<CollectSuccess | CollectFailu
         name: m.name ?? m.slug,
         owner: extractOwner(m.slug),
         updatedAt: nowIso,
-        uptime1dAvg: count > 0 ? sum / count : 0,
-        uptime: ok ? ok.summary.uptime : 0,
-        availability: ok ? ok.summary.availability : 0,
-        recentAvailability: ok ? ok.summary.recentAvailability : 0,
+        // A failed fetch yields nulls, never 0: the availability grid keeps
+        // this model's older buckets untouched, and the caller carries the
+        // previous figures forward, so one dropped request cannot publish
+        // a fake outage.
+        uptime1dAvg: count > 0 ? sum / count : null,
+        uptime: ok ? ok.summary.uptime : null,
+        availability: ok ? ok.summary.availability : null,
+        recentAvailability: ok ? ok.summary.recentAvailability : null,
         buckets,
         providers,
       }
