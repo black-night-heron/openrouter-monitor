@@ -160,6 +160,15 @@ async function main(): Promise<void> {
       `${dataset.uptime.noData} no-data, ${dataset.uptime.error} errors)`,
     )
   }
+  // Failed fetch + nothing to carry forward (the model just appeared on the
+  // free list): leave it out of the table rather than publish a made-up 0%.
+  const unmeasured = dataset.models.filter((m) => m.uptime1dAvg == null)
+  if (unmeasured.length > 0) {
+    console.warn(
+      `[collect-data] Skipping ${unmeasured.length} model(s) with no availability figure ` +
+      `this tick and no previous value: ${unmeasured.map((m) => m.id).join(', ')}`,
+    )
+  }
 
   // 3. Payloads + 30-day merge.
   const status = buildStatusPayload(dataset)
@@ -177,9 +186,11 @@ async function main(): Promise<void> {
     benchmarks = []
   }
 
-  const liveIds = new Set(status.models.map((m) => m.id))
+  // "Live" means still on the free list, not "has a figure this tick": an
+  // unmeasured model must keep its 30-day history in the grid.
+  const liveIds = new Set(dataset.models.map((m) => m.id))
   const metaFor = (id: string) => {
-    const model = status.models.find((m) => m.id === id)
+    const model = dataset.models.find((m) => m.id === id)
     return model ? { owner: model.owner, name: model.name } : undefined
   }
   const uptime = mergeUptimePayload(prevUptime, fresh, now, liveIds, metaFor)

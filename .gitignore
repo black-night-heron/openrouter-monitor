@@ -39,6 +39,9 @@ coverage/
 # Generated static site
 site/
 
+# Seed snapshots for local re-runs (CI writes this in the workflow)
+.seed/
+
 # Agent scratch / planning notes
 .codebuddy/
 

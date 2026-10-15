@@ -26,16 +26,20 @@ export interface ProviderEntry {
   dataLogged: 0 | 1 | null
 }
 
-/** One free model with its deployment providers nested. */
+/** One free model with its deployment providers nested.
+ *  The availability figures are always real measurements: either collected
+ *  this tick or carried forward from the previous dashboard.json. A model
+ *  that has never been measured is simply left out of `models` — the payload
+ *  has no "no data" placeholder, so a failed fetch can never be read as 0%. */
 export interface StatusModel {
   id: string                    // permaslug
   variant: string
   name: string
   owner: string                 // slash-prefix
-  uptime1dAvg: number | null    // 24h mean of buckets.availability (routing-layer aggregate)
-  uptime: number | null         // API summary: overall uptime %
-  availability: number | null   // API summary: overall availability %
-  recentAvailability: number | null // API summary: recent availability %
+  uptime1dAvg: number           // 24h mean of buckets.availability (routing-layer aggregate)
+  uptime: number                // API summary: overall uptime %
+  availability: number          // API summary: overall availability %
+  recentAvailability: number    // API summary: recent availability %
   intelligenceIndex: number | null // Artificial Analysis 0-100; null = unranked
   updatedAt: string             // ISO 8601 UTC
   providers: ProviderEntry[]
@@ -83,10 +87,6 @@ function round2(v: number): number {
   return Math.round(v * 100) / 100
 }
 
-/** round2 with the "no data" case passed through as null. */
-function round2OrNull(v: number | null): number | null {
-  return v == null ? null : round2(v)
-}
 
 /** Round to 1 decimal — KPI bar precision. */
 function round1(v: number): number {
@@ -120,52 +120,56 @@ export function buildStatusPayload(data: Dataset): StatusPayload {
 
   const sorted = [...data.models].sort(compareModelOrder)
   const providerSlugs = new Set<string>()
-  const models: StatusModel[] = sorted.map((m) => {
+  const models: StatusModel[] = []
+  for (const m of sorted) {
     for (const p of m.providers) providerSlugs.add(p.slug)
+    // The four figures come from one availability fetch, so they are either
+    // all present or all absent. Absent means the fetch failed this tick and
+    // the previous dashboard.json had nothing to carry forward (a model that
+    // just appeared on the free list) — skip the row rather than publish a
+    // made-up number.
+    if (
+      m.uptime1dAvg == null ||
+      m.uptime == null ||
+      m.availability == null ||
+      m.recentAvailability == null
+    ) {
+      continue
+    }
     const intel = intelligenceBySlug.get(m.slug)
-    return {
+    models.push({
       id: m.id,
       variant: m.variant,
       name: m.name,
       owner: m.owner,
-      uptime1dAvg: round2OrNull(m.uptime1dAvg),
-      uptime: round2OrNull(m.uptime),
-      availability: round2OrNull(m.availability),
-      recentAvailability: round2OrNull(m.recentAvailability),
+      uptime1dAvg: round2(m.uptime1dAvg),
+      uptime: round2(m.uptime),
+      availability: round2(m.availability),
+      recentAvailability: round2(m.recentAvailability),
       intelligenceIndex: intel == null ? null : round2(intel),
       updatedAt: m.updatedAt,
       providers: [...m.providers]
         .sort((a, b) => (a.slug === b.slug ? 0 : a.slug < b.slug ? -1 : 1))
         .map(toProviderEntry),
-    }
-  })
+    })
+  }
 
   // Unweighted means of per-model figures for the KPI bar. uptimePercent
   // is the 24h bucket mean; availabilityPercent is OpenRouter's own
-  // request-weighted figure. Models with no figure this tick are excluded
-  // from both the sum and the divisor, so a missing fetch cannot pull the
-  // average toward 0.
-  const count = data.models.length
-  const mean = (pick: (m: CollectedModel) => number | null) => {
-    let sum = 0
-    let measured = 0
-    for (const m of data.models) {
-      const v = pick(m)
-      if (v == null) continue
-      sum += v
-      measured++
-    }
-    return measured > 0 ? sum / measured : null
-  }
-  const uptimeAvg = mean((m) => m.uptime1dAvg)
-  const availabilityAvg = mean((m) => m.availability)
-  const lastUpdated = count > 0
-    ? data.models.reduce((acc, m) => (m.updatedAt > acc ? m.updatedAt : acc), data.models[0]!.updatedAt)
+  // request-weighted figure. Only published rows count, so a missing
+  // fetch cannot pull the average toward 0.
+  const measured = models.length
+  const lastUpdated = measured > 0
+    ? models.reduce((acc, m) => (m.updatedAt > acc ? m.updatedAt : acc), models[0]!.updatedAt)
     : null
+  const sumWith = (pick: (m: StatusModel) => number) =>
+    models.reduce((acc, m) => acc + pick(m), 0)
+  const uptimeAvg = measured > 0 ? sumWith((m) => m.uptime1dAvg) / measured : null
+  const availabilityAvg = measured > 0 ? sumWith((m) => m.availability) / measured : null
 
   return {
     summary: {
-      totalFreeModels: count,
+      totalFreeModels: data.models.length,
       providers: providerSlugs.size,
       uptimePercent: uptimeAvg == null ? null : round1(uptimeAvg),
       availabilityPercent: availabilityAvg == null ? null : round1(availabilityAvg),
