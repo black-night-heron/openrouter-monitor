@@ -10,9 +10,10 @@
  *   2. Null == 0, for AVAILABILITY ONLY. A null/omitted availability value
  *      (bucket or summary field) is coerced to 0 here; every other numeric
  *      field (benchmark scores, prices, provider metadata) keeps null
- *      semantics. This covers values inside a response that DID arrive — a
- *      failed request yields no figures at all (see collect.ts), which is not
- *      a measured 0%.
+ *      semantics. The single exception is the newest bucket, which covers a
+ *      window still open at fetch time — it is dropped, not zeroed. This
+ *      covers values inside a response that DID arrive; a failed request
+ *      yields no figures at all (see collect.ts), which is not a measured 0%.
  */
 
 /** A `benchmarks.design_arena` entry — pairwise Elo per category, from the
@@ -589,15 +590,30 @@ export async function fetchModelUptimeRecent(
     return { status: 'no-data' }
   }
 
-  const buckets: ModelUptimeBucket[] = []
+  const parsed: Array<{ ts: number; availability: number | null }> = []
   for (const b of rawBuckets) {
     const ts = parseBucketTimestamp(b?.timestamp)
     if (ts == null) continue
-    buckets.push({
-      timestamp: ts,
-      availability: toAvailability(b?.availability),
-    })
+    const v = b?.availability
+    parsed.push({ ts, availability: typeof v === 'number' && Number.isFinite(v) ? v : null })
   }
+
+  // The newest bucket is a window still open when we fetch: upstream leaves it
+  // null until enough requests land. Dropping it keeps the null→0 policy from
+  // publishing a fake outage at the right edge of the grid — a policy that
+  // means "closed window, no traffic" for every older bucket.
+  if (parsed.length > 0) {
+    let newest = 0
+    for (let i = 1; i < parsed.length; i++) {
+      if (parsed[i]!.ts > parsed[newest]!.ts) newest = i
+    }
+    if (parsed[newest]!.availability == null) parsed.splice(newest, 1)
+  }
+
+  const buckets: ModelUptimeBucket[] = parsed.map((p) => ({
+    timestamp: p.ts,
+    availability: toAvailability(p.availability),
+  }))
   if (buckets.length === 0) {
     return { status: 'no-data' }
   }
