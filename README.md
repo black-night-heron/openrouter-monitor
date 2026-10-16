@@ -4,12 +4,12 @@ Dashboard for the free models on [OpenRouter](https://openrouter.ai): availabili
 
 Live: https://black-night-heron.github.io/openrouter-monitor/
 
-![Models tab](docs/models.png)
+![OpenRouter free-model uptime over the last 30 days](docs/trends.png)
 
 <details>
-<summary>Trends and Compare tabs</summary>
+<summary>Models and Compare tabs</summary>
 
-![Trends tab](docs/trends.png)
+![Models tab](docs/models.png)
 
 ![Compare tab](docs/compare.png)
 
